@@ -213,11 +213,11 @@ Du findest sie unter ${`https://www.ebay-kleinanzeigen.de${url}`}
             let newestMessage;
             try {
                 mediaGroup = await telegramBot.sendMediaGroup(flatChannel, [...images.slice(0, 9).map(src => ({ type: 'photo', media: src } as any))]);
+                newestMessage = await telegramBot.sendMessage(flatChannel, text);
+                await telegramBot.pinChatMessage(flatChannel, newestMessage.message_id);
             } catch (error) {
-                newestMessage = await telegramBot.sendMessage(flatChannel, text, { reply_to_message_id: mediaGroup?.message_id });
+                catchTelegramError(error);
             }
-
-            await telegramBot.pinChatMessage(flatChannel, newestMessage.message_id);
         });
     }
 

@@ -166,10 +166,7 @@ async function scrape(pool: Pool) {
         images = images.filter(src => src.startsWith('https://i.ebayimg.com'));
 
         let hasLocationImg = false;
-        if (mapLocation) {
-            await mapLocation.screenshot({ path: `./images/last-location.png` });
-            hasLocationImg = true;
-        }
+        // TODO: do that
 
         const flat = {
             title,
@@ -180,7 +177,7 @@ async function scrape(pool: Pool) {
             flatProps,
             hasLocationImg,
             images,
-            path: `./images/last-location.png`,
+            path: ``,
             id: encodeURI(title || '') + i
         };
 

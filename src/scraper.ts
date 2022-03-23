@@ -157,9 +157,7 @@ async function scrape(pool: Pool) {
             flatProps[props[i]] = values[i];
         }
 
-        await delay(1000);
-        const mapLocation = await page.$('#viewad-map');
-        await delay(10000);
+        await delay(5000);
 
         /** Get all images from the flat */
         let images = await page.evaluate(() => Array.from(document.images, e => e.src));
@@ -212,7 +210,6 @@ Du findest sie unter ${`https://www.ebay-kleinanzeigen.de${url}`}
 
             let newestMessage;
             try {
-                mediaGroup = await telegramBot.sendMediaGroup(flatChannel, [...images.slice(0, 9).map(src => ({ type: 'photo', media: src } as any))]);
                 newestMessage = await telegramBot.sendMessage(flatChannel, text);
                 await telegramBot.pinChatMessage(flatChannel, newestMessage.message_id);
             } catch (error) {

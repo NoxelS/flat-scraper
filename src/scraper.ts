@@ -5,21 +5,21 @@ import TelegramBot from 'node-telegram-bot-api';
 import { Configuration, OpenAIApi } from 'openai';
 import Puppeteer, { launch, LaunchOptions } from 'puppeteer';
 
+import { storeFlat } from './storage';
+
 
 /** Only use .env files when running in dev mode */
 if (!process.env.produtction) config();
 
 const telegramBot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN || '', { polling: true });
 const flatChannel = process.env.TELEGRAM_CHANNEL_ID || '';
-
-const sendTelegramMessage = msg => telegramBot.sendMessage(flatChannel, msg);
 const sendDebugMessage = msg => (msg ? telegramBot.sendMessage(process.env.TELEGRAM_DEBUG_CHANNEL_ID || '', msg) : null);
 
 export const ebay =
-    'https://www.ebay-kleinanzeigen.de/s-wohnung-mieten/saarbruecken-mitte/preis::950/wohnung/k0c203l16859+wohnung_mieten.verfuegbarm_i:4%2C+wohnung_mieten.verfuegbary_i:2022%2C+wohnung_mieten.zimmer_d:2%2C';
+    'https://www.ebay-kleinanzeigen.de/s-wohnung-mieten/saarbruecken/preis::950/wohnung/k0c203l382+wohnung_mieten.verfuegbarm_i:4%2C+wohnung_mieten.verfuegbary_i:2022%2C+wohnung_mieten.zimmer_d:2%2C';
 export const itemSpacer = '\n\n';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-
+const catchTelegramError = e => sendDebugMessage(e);
 async function scrape(pool: Pool) {
     const configuration = new Configuration({
         apiKey: process.env.OPENAI_API_KEY
@@ -27,13 +27,14 @@ async function scrape(pool: Pool) {
     const openai = new OpenAIApi(configuration);
 
     const browser = await Puppeteer.launch(<LaunchOptions>{
-        headless: false,
+        headless: true,
+        devtools: true,
         args: ['--no-sandbox', '--disable-gpu'],
         timeout: 0
     });
 
     const page = await browser.newPage();
-    sendDebugMessage('Ich gehe gerade auf Ebay.');
+    await sendDebugMessage('Ich gehe gerade auf Ebay.');
     await page.goto(ebay);
 
     /** Items are text array of the html <article> node inner text. */
@@ -48,6 +49,8 @@ async function scrape(pool: Pool) {
 
     /** Post message for daily count of flats for sale */
     sendDebugMessage(`Zurzeit gibt es ${count?.split(' von ')[1]}.`);
+
+    await telegramBot.setChatDescription(flatChannel, `Zurzeit gibt es ${count?.split(' von ')[1]}. Letzt aktualisierung: ${new Date().toISOString()}`);
 
     // const openAiString = `Zurzeit gibt es ${count?.split(' von ')[1]} Wohnungen zu mieten in Saarbrücken. Schreibe bitte ein kurzes Gedicht dazu!
     //     `;
@@ -78,7 +81,7 @@ async function scrape(pool: Pool) {
         return links;
     });
 
-    sendDebugMessage(`Ich habe viele Anzeigen gefunden. (${articleLinks.length})`);
+    await sendDebugMessage(`Ich habe viele Anzeigen gefunden. (${articleLinks.length})`);
 
     for (let i = 0; i < articleLinks.length; i++) {
         const url = articleLinks[i];
@@ -145,7 +148,7 @@ async function scrape(pool: Pool) {
         });
 
         if (props.length !== values.length) {
-            sendDebugMessage('Somethign went wront while getting more info about the flat');
+            await sendDebugMessage('Somethign went wront while getting more info about the flat');
             throw new Error('Somethign went wront while getting more info about the flat');
         }
 
@@ -157,10 +160,15 @@ async function scrape(pool: Pool) {
 
         await delay(1000);
         const mapLocation = await page.$('#viewad-map');
-        await delay(1000);
+        await delay(10000);
+
+        /** Get all images from the flat */
+        let images = await page.evaluate(() => Array.from(document.images, e => e.src));
+        images = images.filter(src => src.startsWith('https://i.ebayimg.com'));
+
         let hasLocationImg = false;
         if (mapLocation) {
-            await mapLocation.screenshot({ path: `./images/location-${encodeURI(title || '') + i}.png` });
+            await mapLocation.screenshot({ path: `./images/last-location.png` });
             hasLocationImg = true;
         }
 
@@ -172,14 +180,17 @@ async function scrape(pool: Pool) {
             checktags,
             flatProps,
             hasLocationImg,
-            path: `./images/location-${encodeURI(title || '') + i}.png`,
+            images,
+            path: `./images/last-location.png`,
             id: encodeURI(title || '') + i
         };
 
-        sendDebugMessage('Neue Wohnung:');
-        sendDebugMessage(JSON.stringify(flat));
+        /** Store in DB */
+        storeFlat(pool, flat, async () => {
+            await sendDebugMessage('Neue Wohnung:');
+            await sendDebugMessage(JSON.stringify(flat));
 
-        const text = `Eine neue Wohnung ist seit ${date} online und hat bereits ${views} Aufrufe!
+            const text = `Eine neue Wohnung ist seit ${date} online und hat bereits ${views} Aufrufe!
 
 Der Titel lautet "${title}" und sie befindet sich in ${location}.
 
@@ -194,13 +205,24 @@ ${checktags.map(c => `\t • ${c} ✓`).join('\r\n')}
 Du findest sie unter ${`https://www.ebay-kleinanzeigen.de${url}`}
 `;
 
-        if (hasLocationImg) {
-            telegramBot.sendPhoto(flatChannel, `./images/location-${i}.png`, { caption: text });
-        } else {
-            sendTelegramMessage(text);
-        }
+            let mediaGroup;
+            try {
+                if (images.length > 0) {
+                    mediaGroup = await telegramBot.sendMediaGroup(flatChannel, [...images.slice(0, 9).map(src => ({ type: 'photo', media: src } as any))]);
+                }
+            } catch (error) {
+                catchTelegramError(error);
+            }
 
-        await delay(1000);
+            let newestMessage;
+            try {
+                mediaGroup = await telegramBot.sendMediaGroup(flatChannel, [...images.slice(0, 9).map(src => ({ type: 'photo', media: src } as any))]);
+            } catch (error) {
+                newestMessage = await telegramBot.sendMessage(flatChannel, text, { reply_to_message_id: mediaGroup?.message_id });
+            }
+
+            await telegramBot.pinChatMessage(flatChannel, newestMessage.message_id);
+        });
     }
 
     await browser.close();

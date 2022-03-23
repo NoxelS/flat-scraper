@@ -28,7 +28,6 @@ async function scrape(pool: Pool) {
 
     const browser = await Puppeteer.launch(<LaunchOptions>{
         headless: true,
-        devtools: true,
         args: ['--no-sandbox', '--disable-gpu'],
         timeout: 0
     });
